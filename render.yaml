@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: saudi-signal-bot
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: SAHMK_API_KEY
+        sync: false
+      - key: SAHMK_BASE_URL
+        value: https://api.sahmk.sa/api/v1
+      - key: DATABASE_URL
+        value: sqlite:///saudi_signals.db
+      - key: BOT_PUBLIC
+        value: "true"
+      - key: DATA_MODE
+        value: delayed
+      - key: POLL_SECONDS
+        value: "1800"
+      - key: TRADE_MONITOR_SECONDS
+        value: "900"
+      - key: MIN_SCORE
+        value: "72"
+      - key: MIN_PROBABILITY
+        value: "65"
+      - key: MAX_NEW_SIGNALS_PER_DAY
+        value: "5"
+      - key: DUPLICATE_COOLDOWN_MIN
+        value: "180"
+      - key: MIN_RR
+        value: "1.8"
+      - key: TRAILING_STOP_ENABLED
+        value: "true"
+      - key: NOTIFY_PROFIT_LEVELS
+        value: "2,5,10,15,20"
+      - key: TIMEZONE
+        value: Asia/Riyadh
+      - key: PAPER_MODE
+        value: "true"
+      - key: HISTORY_PERIOD
+        value: 60d
+      - key: HISTORY_INTERVAL
+        value: 15m

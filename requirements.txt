@@ -1,0 +1,12 @@
+python-telegram-bot[job-queue]==22.3
+requests==2.32.4
+pandas==2.3.2
+numpy==2.3.2
+matplotlib==3.10.5
+Pillow==11.3.0
+SQLAlchemy==2.0.43
+python-dotenv==1.1.1
+pydantic-settings==2.10.1
+scikit-learn==1.7.1
+
+yfinance>=0.2.50
