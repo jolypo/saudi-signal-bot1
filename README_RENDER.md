@@ -43,3 +43,8 @@ Render Free ينام عند عدم وجود inbound traffic. الكود لا ي�
 - `/shutdown` (alias `/stop`): hard zero-market-data mode. Stops new scans, requests cancellation of an active scan, blocks `/market` and `/sectors`, and disables automatic open-trade quote monitoring. Telegram webhook and `/health` remain available.
 - `/resume`: leaves pause/shutdown mode. It does not start a scan; `/signals` is still required.
 - Cancellation is cooperative: an HTTP request already in flight cannot be unsent, but no next symbol/request is started after the stop flag is observed.
+
+## API Firewall (quota protection)
+
+This build uses a DEFAULT-DENY firewall inside `data/sahmk.py`.
+After every deploy/restart the bot starts in `SHUTDOWN`; no SAHMK request can leave the process until `/resume` is sent. Even after `/resume`, SAHMK calls are only permitted inside explicit scopes for `/signals`, `/market`, `/sectors`, or active-trade monitoring. `/shutdown` returns the bot to zero-market-data mode. `/health` reports SAHMK allowed/blocked counters since boot and never calls SAHMK/Yahoo.

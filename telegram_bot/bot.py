@@ -19,7 +19,7 @@ client = SahmkClient(settings.sahmk_base_url, settings.sahmk_api_key)
 tracker = TradeTracker(Session)
 scanner = None  # Lazy: constructed only after /signals passes the local market-hours gate.
 paused = False
-hard_stopped = False
+hard_stopped = True  # Safe default after every restart/deploy: API remains locked until /resume.
 scan_stop_event = threading.Event()
 scan_lock = asyncio.Lock()
 
@@ -105,7 +105,9 @@ async def market(update, context):
     if hard_stopped:
         return await update.message.reply_text('🛑 النظام متوقف بالكامل — 0 طلبات بيانات سوق. استخدم /resume للتشغيل.')
     try:
-        r = client.market_summary(); regime = market_regime(r)
+        with client.allow_scope('/market'):
+            r = client.market_summary()
+        regime = market_regime(r)
         await update.message.reply_text(f"📊 حالة السوق السعودي\n\nTASI: {r.get('index_value','-')} ({r.get('index_change_percent','-')}%)\nMarket Regime: {regime}\nالصاعدة: {r.get('advancing','-')}\nالهابطة: {r.get('declining','-')}\nالحجم: {r.get('total_volume','-')}")
     except Exception as e:
         await update.message.reply_text(f'⚠️ تعذر جلب بيانات السوق: {e}')
@@ -115,7 +117,9 @@ async def sectors(update, context):
     if hard_stopped:
         return await update.message.reply_text('🛑 النظام متوقف بالكامل — 0 طلبات بيانات سوق. استخدم /resume للتشغيل.')
     try:
-        data = client.sectors(); rows = data.get('sectors', data.get('results', []))
+        with client.allow_scope('/sectors'):
+            data = client.sectors()
+        rows = data.get('sectors', data.get('results', []))
         rows = sorted(rows, key=lambda x: float(x.get('change_percent') or 0), reverse=True)
         text = '📊 قوة القطاعات\n\n' + '\n'.join(f"{i+1}. {r.get('sector_name_ar') or r.get('sector_name') or r.get('name')}: {float(r.get('change_percent') or 0):+.2f}%" for i, r in enumerate(rows[:10]))
         await update.message.reply_text(text)
@@ -153,7 +157,8 @@ async def resume(update, context):
 async def health(update, context):
     st = __import__('health_server').get_state()
     mode = 'SHUTDOWN' if hard_stopped else ('PAUSED' if paused else 'READY')
-    await update.message.reply_text(f"🟢 البوت يعمل\nSystem: {mode}\nMode: SIGNALS ONLY + PAPER TRADING\nUniverse: TASI 25\nآخر فحص: {st.get('last_scan_finished') or '-'}\nآخر فحص ناجح: {st.get('last_scan_ok')}\nخطأ آخر فحص: {st.get('last_scan_error') or 'لا يوجد'}")
+    api = client.stats()
+    await update.message.reply_text(f"🟢 البوت يعمل\nSystem: {mode}\nAPI Firewall: DEFAULT-DENY\nSAHMK allowed since boot: {api['allowed']}\nSAHMK blocked since boot: {api['blocked']}\nMode: SIGNALS ONLY + PAPER TRADING\nUniverse: TASI 25\nآخر فحص: {st.get('last_scan_finished') or '-'}\nآخر فحص ناجح: {st.get('last_scan_ok')}\nخطأ آخر فحص: {st.get('last_scan_error') or 'لا يوجد'}")
 
 
 async def signals(update, context):
@@ -225,7 +230,10 @@ async def run_scan(context, manual_chat_id=None):
                 scanner = UniverseScanner(settings.min_score, settings.min_probability, settings.min_rr)
             if hard_stopped or paused or scan_stop_event.is_set():
                 return
-            summary = await asyncio.to_thread(client.market_summary)
+            def _fetch_market_summary():
+                with client.allow_scope('/signals:market_summary'):
+                    return client.market_summary()
+            summary = await asyncio.to_thread(_fetch_market_summary)
             if hard_stopped or paused or scan_stop_event.is_set():
                 return
             regime = market_regime(summary)
@@ -279,7 +287,10 @@ async def monitor_trades(context):
     ids = await subscribers()
     for t in rows:
         try:
-            q = await asyncio.to_thread(client.quote, t.symbol); price = float(q.get('price'))
+            def _fetch_quote(symbol=t.symbol):
+                with client.allow_scope(f'trade_monitor:{symbol}'):
+                    return client.quote(symbol)
+            q = await asyncio.to_thread(_fetch_quote); price = float(q.get('price'))
             events = tracker.update(t, price, settings.profit_levels, settings.trailing_stop_enabled)
             for kind, pnl in events:
                 if kind.startswith('PROFIT_'):
