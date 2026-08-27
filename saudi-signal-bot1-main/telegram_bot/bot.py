@@ -1,5 +1,7 @@
 from __future__ import annotations
 import asyncio
+import os
+import time as pytime
 from datetime import datetime, timedelta, timezone, time
 from zoneinfo import ZoneInfo
 from telegram import Update
@@ -255,6 +257,23 @@ def main():
     # IMPORTANT: market scanning is manual-only. /signals is the only trigger.
     # Do not schedule run_scan() here; the free SAHMK plan has a strict daily quota.
     app.job_queue.run_repeating(monitor_trades, interval=settings.trade_monitor_seconds, first=60)
+
+    # Render performs zero-downtime deploys: for a short period the old and new
+    # containers can overlap. Starting Telegram long-polling immediately in the
+    # new container makes both containers call getUpdates with the same token,
+    # which Telegram rejects with Conflict. The HTTP health server is already
+    # listening above, so let Render mark the new container healthy and retire
+    # the old one before this container starts polling.
+    polling_start_delay = max(0, int(os.getenv("TELEGRAM_POLLING_START_DELAY", "75")))
+    if polling_start_delay:
+        print(
+            f"Telegram polling will start in {polling_start_delay}s "
+            "to avoid Render deploy overlap.",
+            flush=True,
+        )
+        pytime.sleep(polling_start_delay)
+
+    print("Starting Telegram polling (single instance).", flush=True)
     app.run_polling(drop_pending_updates=True)
 
 

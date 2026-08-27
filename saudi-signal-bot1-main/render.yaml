@@ -19,6 +19,8 @@ services:
         value: delayed
       - key: TRADE_MONITOR_SECONDS
         value: "900"
+      - key: TELEGRAM_POLLING_START_DELAY
+        value: "75"
       - key: MIN_SCORE
         value: "72"
       - key: MIN_PROBABILITY
