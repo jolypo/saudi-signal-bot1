@@ -59,3 +59,7 @@ docker compose logs -f
 ## أمان
 
 `.env` يحتوي الأسرار محليًا ولا يجب رفعه إلى GitHub. غيّر Telegram Bot Token وSAHMK API Key إذا تم نشرهما في مكان عام.
+
+## Telegram Arabic Menu
+The bot registers the official Telegram command menu with Arabic descriptions and also shows a persistent Arabic reply keyboard after `/start`.
+The Arabic buttons call the same guarded handlers as the slash commands, so all SAHMK firewall and market-hours protections remain active.

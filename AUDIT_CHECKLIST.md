@@ -27,3 +27,9 @@ Search Render logs for `AUDIT`.
 If SAHMK dashboard increments, this process must show an event named `sahmk_http_outbound` before the request leaves the process. It includes `request_no`, endpoint `path`, `reason`, and safe `callers` (file:line:function).
 
 If the dashboard increments but there is **no** matching `sahmk_http_outbound` event and `/health` still shows the same `allowed` count, the request did not originate from this running process. Compare `key_fp` and `instance` across services.
+
+## Arabic Menu checks
+- Official BotCommand menu registered at startup with Arabic descriptions.
+- Persistent ReplyKeyboard is shown on `/start` and `/help`.
+- Arabic button clicks are logged as `telegram_arabic_menu`.
+- Buttons reuse existing guarded handlers; they do not bypass SAHMK firewall or market-hours gates.

@@ -3,8 +3,8 @@ import asyncio
 import threading
 from datetime import datetime, timedelta, timezone, time
 from zoneinfo import ZoneInfo
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, ReplyKeyboardMarkup, BotCommand
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from config.settings import settings
 from config.universe import TASI_25, BY_SYMBOL
 from database.models import db, User, Trade
@@ -24,6 +24,57 @@ paused = False
 hard_stopped = True  # Safe default after every restart/deploy: API remains locked until /resume.
 scan_stop_event = threading.Event()
 scan_lock = asyncio.Lock()
+
+
+# =========================================================
+# Arabic Telegram UI
+# =========================================================
+ARABIC_BUTTONS = {
+    "🔎 البحث عن فرصة": "signals",
+    "📊 حالة السوق": "market",
+    "🏭 قوة القطاعات": "sectors",
+    "💼 الصفقات المفتوحة": "open",
+    "📚 سجل الصفقات": "history",
+    "📈 الإحصائيات": "stats",
+    "❤️ حالة النظام": "health",
+    "⚙️ الإعدادات": "settings",
+    "⏸️ إيقاف البحث": "pause",
+    "🛑 إيقاف بيانات السوق": "shutdown",
+    "▶️ تشغيل النظام": "resume",
+    "🧪 التشخيص": "debug",
+    "❓ المساعدة": "help",
+}
+
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        ["🔎 البحث عن فرصة", "📊 حالة السوق"],
+        ["🏭 قوة القطاعات", "💼 الصفقات المفتوحة"],
+        ["📚 سجل الصفقات", "📈 الإحصائيات"],
+        ["❤️ حالة النظام", "⚙️ الإعدادات"],
+        ["⏸️ إيقاف البحث", "▶️ تشغيل النظام"],
+        ["🛑 إيقاف بيانات السوق", "🧪 التشخيص"],
+        ["❓ المساعدة"],
+    ],
+    resize_keyboard=True,
+    is_persistent=True,
+    input_field_placeholder="اختر أمرًا من القائمة",
+)
+
+BOT_COMMANDS = [
+    BotCommand("signals", "🔎 البحث عن فرصة"),
+    BotCommand("market", "📊 حالة السوق"),
+    BotCommand("sectors", "🏭 قوة القطاعات"),
+    BotCommand("open", "💼 الصفقات المفتوحة"),
+    BotCommand("history", "📚 سجل الصفقات"),
+    BotCommand("stats", "📈 الإحصائيات"),
+    BotCommand("health", "❤️ حالة النظام"),
+    BotCommand("settings", "⚙️ الإعدادات"),
+    BotCommand("pause", "⏸️ إيقاف البحث"),
+    BotCommand("shutdown", "🛑 إيقاف بيانات السوق"),
+    BotCommand("resume", "▶️ تشغيل النظام"),
+    BotCommand("debug", "🧪 التشخيص"),
+    BotCommand("help", "❓ المساعدة"),
+]
 
 
 def saudi_market_session_status(now=None):
@@ -109,12 +160,12 @@ async def subscribers():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _audit_command(update, "/start")
     await subscribe(update)
-    await update.message.reply_text('🤖 بوت إشارات السوق السعودي\n\nتم تسجيلك لاستقبال الإشارات.\nSIGNALS ONLY + PAPER TRADING\n\n/help للأوامر.')
+    await update.message.reply_text('🤖 بوت إشارات السوق السعودي\n\nتم تسجيلك لاستقبال الإشارات.\nاختر ما تريد من القائمة العربية بالأسفل.', reply_markup=MAIN_KEYBOARD)
 
 
 async def help_cmd(update, context):
     _audit_command(update, "/help")
-    await update.message.reply_text('/signals\n/open\n/history\n/stats\n/market\n/sectors\n/settings\n/pause\n/shutdown\n/resume\n/health')
+    await update.message.reply_text('📋 قائمة الأوامر\n\nاختر الأمر المطلوب من الأزرار العربية بالأسفل.\nيمكنك أيضًا استخدام زر Menu الرسمي في تيليجرام.', reply_markup=MAIN_KEYBOARD)
 
 
 async def market(update, context):
@@ -370,6 +421,40 @@ async def monitor_trades(context):
 
 
 
+async def arabic_menu_dispatch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Dispatch persistent Arabic keyboard buttons to existing command handlers.
+
+    The keyboard itself performs no market-data requests. Data-consuming handlers
+    keep their existing firewall/session gates.
+    """
+    text = (update.message.text or "").strip() if update.message else ""
+    command = ARABIC_BUTTONS.get(text)
+    if not command:
+        return await update.message.reply_text(
+            "اختر أمرًا من القائمة العربية بالأسفل.",
+            reply_markup=MAIN_KEYBOARD,
+        )
+
+    event("telegram_arabic_menu", button=text, command=command, sahmk=client.stats())
+    handlers = {
+        "signals": signals,
+        "market": market,
+        "sectors": sectors,
+        "open": open_cmd,
+        "history": history,
+        "stats": stats,
+        "health": health,
+        "settings": settings_cmd,
+        "pause": pause,
+        "shutdown": shutdown,
+        "resume": resume,
+        "debug": debug_cmd,
+        "help": help_cmd,
+    }
+    await handlers[command](update, context)
+
+
+
 async def error_handler(update, context):
     err = context.error
     event(
@@ -386,6 +471,7 @@ def build_application():
     handlers = [('start', start), ('help', help_cmd), ('market', market), ('sectors', sectors), ('settings', settings_cmd), ('pause', pause), ('shutdown', shutdown), ('stop', shutdown), ('resume', resume), ('health', health), ('signals', signals), ('open', open_cmd), ('history', history), ('stats', stats), ('debug', debug_cmd)]
     for cmd, fn in handlers:
         app.add_handler(CommandHandler(cmd, fn))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, arabic_menu_dispatch))
     app.add_error_handler(error_handler)
     # No automatic scanner. Only /signals can call run_scan().
     app.job_queue.run_repeating(monitor_trades, interval=settings.trade_monitor_seconds, first=60)

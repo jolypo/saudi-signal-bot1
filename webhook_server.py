@@ -33,6 +33,10 @@ async def lifespan(app: FastAPI):
     )
     await telegram_app.initialize()
     await telegram_app.start()
+    # Register the official Telegram Menu commands with Arabic descriptions.
+    from telegram_bot.bot import BOT_COMMANDS
+    await telegram_app.bot.set_my_commands(BOT_COMMANDS)
+    event("telegram_commands_registered", count=len(BOT_COMMANDS), sahmk=client.stats())
     event("telegram_set_webhook_begin", url=webhook_url)
     await telegram_app.bot.set_webhook(
         url=webhook_url,
