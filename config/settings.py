@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     database_url: str = 'sqlite:///saudi_signals.db'
     bot_public: bool = True
     data_mode: str = 'delayed'
+    # Kept only for backward-compatible env files. Scanning is manual-only via /signals.
     poll_seconds: int = 1800
     trade_monitor_seconds: int = 900
     port: int = 10000

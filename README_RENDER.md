@@ -27,3 +27,19 @@ Render Free ينام عند عدم وجود inbound traffic. الكود لا ي�
 - Health endpoint
 - حفظ حالات إشعارات الربح لمنع التكرار
 - استئناف الصفقات المفتوحة بعد إعادة التشغيل من SQLite
+
+
+## API quota behavior (manual scan mode)
+
+- The market scanner does **not** run on a timer.
+- A scan starts only when a Telegram user sends `/signals`.
+- `/health`, `/open`, `/history`, `/stats`, `/settings`, `/pause`, and `/resume` do not start a market scan.
+- `/market` and `/sectors` each call SAHMK only when explicitly requested.
+- Open paper trades are still monitored automatically; SAHMK quote calls are made only when at least one paper trade is open.
+- Historical TASI-25 candles used by the scanner come from Yahoo Finance, so Yahoo rate limits can still affect a manual `/signals` scan.
+
+## Emergency API controls
+- `/pause`: stops new signal scans and requests cancellation of a scan already in progress; open-paper-trade monitoring remains enabled.
+- `/shutdown` (alias `/stop`): hard zero-market-data mode. Stops new scans, requests cancellation of an active scan, blocks `/market` and `/sectors`, and disables automatic open-trade quote monitoring. Telegram webhook and `/health` remain available.
+- `/resume`: leaves pause/shutdown mode. It does not start a scan; `/signals` is still required.
+- Cancellation is cooperative: an HTTP request already in flight cannot be unsent, but no next symbol/request is started after the stop flag is observed.

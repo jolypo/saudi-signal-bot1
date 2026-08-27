@@ -17,8 +17,6 @@ services:
         value: "true"
       - key: DATA_MODE
         value: delayed
-      - key: POLL_SECONDS
-        value: "1800"
       - key: TRADE_MONITOR_SECONDS
         value: "900"
       - key: MIN_SCORE

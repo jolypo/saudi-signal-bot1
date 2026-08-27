@@ -21,9 +21,11 @@ class UniverseScanner:
         self.min_probability = min_probability
         self.min_rr = min_rr
 
-    def scan(self, market_bullish: bool = True):
+    def scan(self, market_bullish: bool = True, stop_event=None):
         results = []
         for item in TASI_25:
+            if stop_event is not None and stop_event.is_set():
+                break
             try:
                 df = self.history.history(item["symbol"])
                 if len(df) < 60:

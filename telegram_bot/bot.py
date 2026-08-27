@@ -1,6 +1,8 @@
 from __future__ import annotations
 import asyncio
-from datetime import datetime, timedelta, timezone
+import threading
+from datetime import datetime, timedelta, timezone, time
+from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from config.settings import settings
@@ -15,9 +17,52 @@ from health_server import start_health_server, update_state
 Session = db(settings.database_url)
 client = SahmkClient(settings.sahmk_base_url, settings.sahmk_api_key)
 tracker = TradeTracker(Session)
-scanner = UniverseScanner(settings.min_score, settings.min_probability, settings.min_rr)
+scanner = None  # Lazy: constructed only after /signals passes the local market-hours gate.
 paused = False
+hard_stopped = False
+scan_stop_event = threading.Event()
 scan_lock = asyncio.Lock()
+
+
+def saudi_market_session_status(now=None):
+    """Return (is_open, message) without making any API/network request.
+
+    Saudi Exchange regular equity trading is Sunday-Thursday, 10:00-15:00 KSA.
+    This guard intentionally errs on the side of preserving API quota outside the session.
+    Exchange holidays are not inferred here; an optional live check can be added later if quota allows.
+    """
+    tz = ZoneInfo(settings.timezone or "Asia/Riyadh")
+    now = now.astimezone(tz) if now is not None else datetime.now(tz)
+
+    # Python weekday: Monday=0 ... Friday=4, Saturday=5, Sunday=6
+    if now.weekday() in (4, 5):
+        return False, (
+            "🔴 السوق السعودي مغلق اليوم.\n"
+            "أيام التداول: الأحد إلى الخميس.\n"
+            "⏰ أعد المحاولة عند الساعة 10:00 صباحًا بتوقيت السعودية."
+        )
+
+    open_at = time(10, 0)
+    close_at = time(15, 0)
+    local_time = now.time().replace(tzinfo=None)
+
+    if local_time < open_at:
+        return False, (
+            "🔴 السوق السعودي مغلق حاليًا.\n"
+            f"الوقت الآن: {now:%H:%M} بتوقيت السعودية.\n"
+            "⏰ يبدأ التداول الساعة 10:00 صباحًا. حاول عند الافتتاح."
+        )
+
+    if local_time >= close_at:
+        return False, (
+            "🔴 السوق السعودي مغلق حاليًا.\n"
+            f"الوقت الآن: {now:%H:%M} بتوقيت السعودية.\n"
+            "⏰ انتهت جلسة اليوم الساعة 15:00. حاول الساعة 10:00 صباح يوم التداول القادم."
+        )
+
+    return True, (
+        f"🟢 السوق مفتوح — {now:%H:%M} بتوقيت السعودية."
+    )
 
 
 def market_regime(summary):
@@ -53,10 +98,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_cmd(update, context):
-    await update.message.reply_text('/signals\n/open\n/history\n/stats\n/market\n/sectors\n/settings\n/pause\n/resume\n/health')
+    await update.message.reply_text('/signals\n/open\n/history\n/stats\n/market\n/sectors\n/settings\n/pause\n/shutdown\n/resume\n/health')
 
 
 async def market(update, context):
+    if hard_stopped:
+        return await update.message.reply_text('🛑 النظام متوقف بالكامل — 0 طلبات بيانات سوق. استخدم /resume للتشغيل.')
     try:
         r = client.market_summary(); regime = market_regime(r)
         await update.message.reply_text(f"📊 حالة السوق السعودي\n\nTASI: {r.get('index_value','-')} ({r.get('index_change_percent','-')}%)\nMarket Regime: {regime}\nالصاعدة: {r.get('advancing','-')}\nالهابطة: {r.get('declining','-')}\nالحجم: {r.get('total_volume','-')}")
@@ -65,6 +112,8 @@ async def market(update, context):
 
 
 async def sectors(update, context):
+    if hard_stopped:
+        return await update.message.reply_text('🛑 النظام متوقف بالكامل — 0 طلبات بيانات سوق. استخدم /resume للتشغيل.')
     try:
         data = client.sectors(); rows = data.get('sectors', data.get('results', []))
         rows = sorted(rows, key=lambda x: float(x.get('change_percent') or 0), reverse=True)
@@ -75,27 +124,62 @@ async def sectors(update, context):
 
 
 async def settings_cmd(update, context):
-    await update.message.reply_text(f'⚙️ الإعدادات\nUniverse: 25 سهم\nMinimum Score: {settings.min_score}\nMinimum Probability: {settings.min_probability}%\nMax signals/day: {settings.max_new_signals_per_day}\nScan: {settings.poll_seconds}s\nHistory: {settings.history_period} / {settings.history_interval}\nPaper: {settings.paper_mode}\nRender PORT: {settings.port}')
+    await update.message.reply_text(f'⚙️ الإعدادات\nUniverse: 25 سهم\nMinimum Score: {settings.min_score}\nMinimum Probability: {settings.min_probability}%\nMax signals/day: {settings.max_new_signals_per_day}\nScan: يدوي فقط عبر /signals\nHistory: {settings.history_period} / {settings.history_interval}\nPaper: {settings.paper_mode}\nRender PORT: {settings.port}')
 
 
 async def pause(update, context):
-    global paused; paused = True
-    await update.message.reply_text('⏸️ تم إيقاف الإشارات الجديدة. متابعة الصفقات الورقية مستمرة.')
+    global paused
+    paused = True
+    scan_stop_event.set()
+    await update.message.reply_text('⏸️ تم إيقاف البحث عن إشارات جديدة. إذا كان فحص جارٍ فسيتوقف بعد الطلب الحالي. متابعة الصفقات الورقية مستمرة.')
+
+
+async def shutdown(update, context):
+    global paused, hard_stopped
+    paused = True
+    hard_stopped = True
+    scan_stop_event.set()
+    await update.message.reply_text('🛑 تم إيقاف بيانات السوق بالكامل. لا فحص، لا SAHMK، لا Yahoo، ولا مراقبة صفقات. Telegram و /health فقط يعملان. استخدم /resume للتشغيل.')
 
 
 async def resume(update, context):
-    global paused; paused = False
-    await update.message.reply_text('▶️ تم استئناف الإشارات.')
+    global paused, hard_stopped
+    paused = False
+    hard_stopped = False
+    scan_stop_event.clear()
+    await update.message.reply_text('▶️ تم استئناف النظام. لن يبدأ أي فحص حتى ترسل /signals.')
 
 
 async def health(update, context):
     st = __import__('health_server').get_state()
-    await update.message.reply_text(f"🟢 البوت يعمل\nMode: SIGNALS ONLY + PAPER TRADING\nUniverse: TASI 25\nآخر فحص: {st.get('last_scan_finished') or '-'}\nآخر فحص ناجح: {st.get('last_scan_ok')}\nخطأ آخر فحص: {st.get('last_scan_error') or 'لا يوجد'}")
+    mode = 'SHUTDOWN' if hard_stopped else ('PAUSED' if paused else 'READY')
+    await update.message.reply_text(f"🟢 البوت يعمل\nSystem: {mode}\nMode: SIGNALS ONLY + PAPER TRADING\nUniverse: TASI 25\nآخر فحص: {st.get('last_scan_finished') or '-'}\nآخر فحص ناجح: {st.get('last_scan_ok')}\nخطأ آخر فحص: {st.get('last_scan_error') or 'لا يوجد'}")
 
 
 async def signals(update, context):
     await subscribe(update)
-    await update.message.reply_text('🔎 تم تشغيل الفحص اليدوي على قائمة TASI-25. قد يستغرق عدة دقائق.')
+
+    if hard_stopped:
+        await update.message.reply_text('🛑 النظام متوقف بالكامل. استخدم /resume أولًا.')
+        return
+
+    # Zero-API gate: never call SAHMK or Yahoo while the exchange is closed.
+    is_open, session_message = saudi_market_session_status()
+    if not is_open:
+        await update.message.reply_text(session_message)
+        return
+
+    if paused:
+        await update.message.reply_text('⏸️ الإشارات الجديدة موقوفة حاليًا. استخدم /resume ثم /signals.')
+        return
+
+    if scan_lock.locked():
+        await update.message.reply_text('⏳ يوجد فحص جارٍ بالفعل. انتظر انتهاءه قبل طلب فحص جديد.')
+        return
+
+    await update.message.reply_text(
+        f'{session_message}\n🔎 بدأ الفحص اليدوي على قائمة TASI-25. قد يستغرق عدة دقائق.'
+    )
     await run_scan(context, manual_chat_id=update.effective_chat.id)
 
 
@@ -123,8 +207,10 @@ async def stats(update, context):
 
 
 async def run_scan(context, manual_chat_id=None):
-    global paused
-    if paused and manual_chat_id is None:
+    global paused, hard_stopped, scanner
+    if hard_stopped:
+        return
+    if paused:
         return
     if scan_lock.locked():
         return
@@ -132,10 +218,23 @@ async def run_scan(context, manual_chat_id=None):
         started = datetime.now(timezone.utc).isoformat()
         update_state(last_scan_started=started, last_scan_error=None)
         try:
+            scan_stop_event.clear()
+            # Construct the historical-data scanner only on an explicit, in-session /signals request.
+            # This guarantees importing/using yfinance cannot happen during process startup or /health.
+            if scanner is None:
+                scanner = UniverseScanner(settings.min_score, settings.min_probability, settings.min_rr)
+            if hard_stopped or paused or scan_stop_event.is_set():
+                return
             summary = await asyncio.to_thread(client.market_summary)
+            if hard_stopped or paused or scan_stop_event.is_set():
+                return
             regime = market_regime(summary)
             bullish = regime != 'BEARISH'
-            results = await asyncio.to_thread(scanner.scan, bullish)
+            results = await asyncio.to_thread(scanner.scan, bullish, scan_stop_event)
+            if hard_stopped or paused or scan_stop_event.is_set():
+                if manual_chat_id:
+                    await context.bot.send_message(manual_chat_id, "🛑 تم إلغاء الفحص.")
+                return
             s = Session(); today = datetime.now().date()
             sent_today = s.query(Trade).filter(Trade.entry_time >= datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)).count(); s.close()
             quota = max(0, settings.max_new_signals_per_day - sent_today)
@@ -167,8 +266,17 @@ async def run_scan(context, manual_chat_id=None):
 
 
 async def monitor_trades(context):
+    if hard_stopped:
+        return
     update_state(last_trade_monitor=datetime.now(timezone.utc).isoformat())
-    rows = tracker.open_trades(); ids = await subscribers()
+    # Zero-API gate for the automatic monitor too. No quote calls outside TASI session.
+    is_open, _ = saudi_market_session_status()
+    if not is_open:
+        return
+    rows = tracker.open_trades()
+    if not rows:
+        return
+    ids = await subscribers()
     for t in rows:
         try:
             q = await asyncio.to_thread(client.quote, t.symbol); price = float(q.get('price'))
@@ -187,18 +295,12 @@ async def monitor_trades(context):
             pass
 
 
-async def scheduled_scan(context): await run_scan(context)
 
-
-def main():
-    start_health_server()
+def build_application():
     app = Application.builder().token(settings.telegram_bot_token).build()
-    handlers = [('start', start), ('help', help_cmd), ('market', market), ('sectors', sectors), ('settings', settings_cmd), ('pause', pause), ('resume', resume), ('health', health), ('signals', signals), ('open', open_cmd), ('history', history), ('stats', stats)]
-    for cmd, fn in handlers: app.add_handler(CommandHandler(cmd, fn))
-    app.job_queue.run_repeating(scheduled_scan, interval=settings.poll_seconds, first=20)
+    handlers = [('start', start), ('help', help_cmd), ('market', market), ('sectors', sectors), ('settings', settings_cmd), ('pause', pause), ('shutdown', shutdown), ('stop', shutdown), ('resume', resume), ('health', health), ('signals', signals), ('open', open_cmd), ('history', history), ('stats', stats)]
+    for cmd, fn in handlers:
+        app.add_handler(CommandHandler(cmd, fn))
+    # No automatic scanner. Only /signals can call run_scan().
     app.job_queue.run_repeating(monitor_trades, interval=settings.trade_monitor_seconds, first=60)
-    app.run_polling(drop_pending_updates=True)
-
-
-if __name__ == '__main__':
-    main()
+    return app
