@@ -1,139 +1,43 @@
 services:
   - type: web
-    name: saudi-tasi-signal-bot
+    name: saudi-signal-bot
     runtime: docker
     plan: free
     healthCheckPath: /health
     envVars:
-      - key: SIGNAL_BOT_TOKEN
-        sync: false
-      - key: PROFIT_BOT_TOKEN
-        sync: false
-      - key: LOSS_BOT_TOKEN
-        sync: false
-      - key: REPORT_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_CHAT_ID
-        sync: false
-      - key: TELEGRAM_CHANNEL_ID
-        sync: false
-      - key: TELEGRAM_ADMIN_USER_ID
+      - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: SAHMK_API_KEY
         sync: false
       - key: SAHMK_BASE_URL
         value: https://api.sahmk.sa/api/v1
-      - key: SAHMK_PLAN
-        value: free
-      - key: SAHMK_MIN_REQUEST_INTERVAL
-        value: "6.5"
-      - key: SAHMK_LOCAL_DAILY_LIMIT
-        value: "100"
-      - key: SAHMK_DAILY_SWITCH_LIMIT
-        value: "90"
-      - key: PROVIDER_SWITCH_ON_DAILY_LIMIT
+      - key: DATABASE_URL
+        value: sqlite:///saudi_signals.db
+      - key: BOT_PUBLIC
         value: "true"
-      - key: PROVIDER_SWITCH_ON_429
-        value: "false"
-      - key: TASILAB_API_KEY
-        sync: false
-      - key: TASILAB_BASE_URL
-        value: https://api.tasilab.com
-      - key: TASILAB_TIMEOUT_SECONDS
-        value: "15"
-      - key: TASILAB_MIN_REQUEST_INTERVAL
-        value: "0.6"
-      - key: TASILAB_BULK_CHUNK_SIZE
-        value: "20"
-      - key: HISTORICAL_PROVIDER
-        value: yahoo
-      - key: HISTORICAL_MAX_PRICE_GAP_PCT
-        value: "15"
-      - key: INTRADAY_MAX_PRICE_GAP_PCT
-        value: "4"
-      - key: HISTORICAL_INTRADAY_MAX_AGE_MINUTES
-        value: "45"
-      - key: INTRADAY_MIN_BARS
-        value: "60"
-      - key: SWING_MIN_BARS
-        value: "120"
-      - key: TELEGRAM_MODE
-        value: auto
-      - key: PAPER_MODE
-        value: "true"
-      - key: STATE_DIR
-        value: data
-      - key: SCAN_INTERVAL_SECONDS
+      - key: DATA_MODE
+        value: delayed
+      - key: TRADE_MONITOR_SECONDS
         value: "900"
-      - key: TRADE_MONITOR_QUOTES_PER_CYCLE
-        value: "3"
-      - key: TRADE_PRICE_UPDATE_MINUTES
-        value: "20"
-      - key: MANUAL_QUOTES_PER_SIGNAL
-        value: "50"
-      - key: DETAIL_QUOTES_PER_SIGNAL
-        value: "5"
-      - key: MARKET_CACHE_SECONDS
-        value: "600"
-      - key: UNIVERSE_REFRESH_SECONDS
-        value: "21600"
-      - key: BOOTSTRAP_UNIVERSE_FILE
-        value: app/data/tasi_universe.json
-      - key: MARKET_OPEN
-        value: "10:00"
-      - key: MARKET_CLOSE
-        value: "15:00"
-      - key: SIGNAL_WINDOW_START
-        value: "10:30"
-      - key: SIGNAL_WINDOW_END
-        value: "14:30"
-      - key: TIMEZONE
-        value: Asia/Riyadh
-      - key: ALLOW_OFF_HOURS_SCAN
-        value: "false"
       - key: MIN_SCORE
-        value: "82"
+        value: "72"
       - key: MIN_PROBABILITY
         value: "65"
-      - key: MIN_DAILY_TRADED_VALUE
-        value: "2000000"
-      - key: MAX_DAILY_SIGNALS
-        value: "3"
-      - key: MAX_OPEN_TRADES
+      - key: MAX_NEW_SIGNALS_PER_DAY
         value: "5"
-      - key: MAX_RISK_PER_TRADE
-        value: "0.01"
-      - key: DATA_MAX_DELAY_MINUTES
-        value: "30"
+      - key: DUPLICATE_COOLDOWN_MIN
+        value: "180"
       - key: MIN_RR
         value: "1.8"
-      - key: TP1_PERCENT
-        value: "30"
-      - key: TP2_PERCENT
-        value: "30"
-      - key: TP3_PERCENT
-        value: "40"
-      - key: SLIPPAGE_BPS
-        value: "5"
-      - key: FEE_BPS
-        value: "15.5"
-      - key: ALLOW_LONG
-        value: "true"
       - key: TRAILING_STOP_ENABLED
-        value: "false"
-      - key: TRAILING_AFTER_TP1_TO_ENTRY
         value: "true"
-      - key: TRAILING_AFTER_TP2_ATR
-        value: "1.0"
-      - key: PROFIT_ALERT_THRESHOLDS
+      - key: NOTIFY_PROFIT_LEVELS
         value: "2,5,10,15,20"
-      - key: NEAR_SL_WARNING_PCT
-        value: "0.5"
-      - key: WEEKLY_REPORT_ENABLED
+      - key: TIMEZONE
+        value: Asia/Riyadh
+      - key: PAPER_MODE
         value: "true"
-      - key: WEEKLY_REPORT_WEEKDAY
-        value: "3"
-      - key: WEEKLY_REPORT_HOUR
-        value: "15"
-      - key: WEEKLY_REPORT_MINUTE
-        value: "5"
+      - key: HISTORY_PERIOD
+        value: 60d
+      - key: HISTORY_INTERVAL
+        value: 15m
