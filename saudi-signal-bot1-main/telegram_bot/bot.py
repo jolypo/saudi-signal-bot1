@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, time
+from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from config.settings import settings
@@ -18,6 +19,47 @@ tracker = TradeTracker(Session)
 scanner = UniverseScanner(settings.min_score, settings.min_probability, settings.min_rr)
 paused = False
 scan_lock = asyncio.Lock()
+
+
+def saudi_market_session_status(now=None):
+    """Return (is_open, message) without making any API/network request.
+
+    Saudi Exchange regular equity trading is Sunday-Thursday, 10:00-15:00 KSA.
+    This guard intentionally errs on the side of preserving API quota outside the session.
+    Exchange holidays are not inferred here; an optional live check can be added later if quota allows.
+    """
+    tz = ZoneInfo(settings.timezone or "Asia/Riyadh")
+    now = now.astimezone(tz) if now is not None else datetime.now(tz)
+
+    # Python weekday: Monday=0 ... Friday=4, Saturday=5, Sunday=6
+    if now.weekday() in (4, 5):
+        return False, (
+            "🔴 السوق السعودي مغلق اليوم.\n"
+            "أيام التداول: الأحد إلى الخميس.\n"
+            "⏰ أعد المحاولة عند الساعة 10:00 صباحًا بتوقيت السعودية."
+        )
+
+    open_at = time(10, 0)
+    close_at = time(15, 0)
+    local_time = now.time().replace(tzinfo=None)
+
+    if local_time < open_at:
+        return False, (
+            "🔴 السوق السعودي مغلق حاليًا.\n"
+            f"الوقت الآن: {now:%H:%M} بتوقيت السعودية.\n"
+            "⏰ يبدأ التداول الساعة 10:00 صباحًا. حاول عند الافتتاح."
+        )
+
+    if local_time >= close_at:
+        return False, (
+            "🔴 السوق السعودي مغلق حاليًا.\n"
+            f"الوقت الآن: {now:%H:%M} بتوقيت السعودية.\n"
+            "⏰ انتهت جلسة اليوم الساعة 15:00. حاول الساعة 10:00 صباح يوم التداول القادم."
+        )
+
+    return True, (
+        f"🟢 السوق مفتوح — {now:%H:%M} بتوقيت السعودية."
+    )
 
 
 def market_regime(summary):
@@ -95,7 +137,24 @@ async def health(update, context):
 
 async def signals(update, context):
     await subscribe(update)
-    await update.message.reply_text('🔎 تم تشغيل الفحص اليدوي على قائمة TASI-25. قد يستغرق عدة دقائق.')
+
+    # Zero-API gate: never call SAHMK or Yahoo while the exchange is closed.
+    is_open, session_message = saudi_market_session_status()
+    if not is_open:
+        await update.message.reply_text(session_message)
+        return
+
+    if paused:
+        await update.message.reply_text('⏸️ الإشارات الجديدة موقوفة حاليًا. استخدم /resume ثم /signals.')
+        return
+
+    if scan_lock.locked():
+        await update.message.reply_text('⏳ يوجد فحص جارٍ بالفعل. انتظر انتهاءه قبل طلب فحص جديد.')
+        return
+
+    await update.message.reply_text(
+        f'{session_message}\n🔎 بدأ الفحص اليدوي على قائمة TASI-25. قد يستغرق عدة دقائق.'
+    )
     await run_scan(context, manual_chat_id=update.effective_chat.id)
 
 
