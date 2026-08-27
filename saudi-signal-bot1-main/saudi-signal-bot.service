@@ -1,0 +1,13 @@
+[Unit]
+Description=Saudi Telegram Signal Bot
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/saudi_signal_bot
+ExecStart=/usr/bin/python3 /opt/saudi_signal_bot/main.py
+Restart=always
+RestartSec=10
+EnvironmentFile=/opt/saudi_signal_bot/.env
+
+[Install]
+WantedBy=multi-user.target
