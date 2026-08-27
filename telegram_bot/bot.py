@@ -13,9 +13,11 @@ from charts.signal_card import make_signal_chart
 from scanner.universe_scanner import UniverseScanner
 from trade_tracker.tracker import TradeTracker
 from health_server import start_health_server, update_state
+from diagnostics import event, recent
 
 Session = db(settings.database_url)
 client = SahmkClient(settings.sahmk_base_url, settings.sahmk_api_key)
+client.disable("startup_default_shutdown")
 tracker = TradeTracker(Session)
 scanner = None  # Lazy: constructed only after /signals passes the local market-hours gate.
 paused = False
@@ -65,6 +67,18 @@ def saudi_market_session_status(now=None):
     )
 
 
+def _audit_command(update: Update, command: str) -> None:
+    event(
+        "telegram_command",
+        command=command,
+        chat_id=getattr(update.effective_chat, "id", None),
+        user_id=getattr(update.effective_user, "id", None),
+        hard_stopped=hard_stopped,
+        paused=paused,
+        sahmk=client.stats(),
+    )
+
+
 def market_regime(summary):
     x = summary.get('summary', summary)
     mood = str(x.get('market_mood', 'NEUTRAL')).upper()
@@ -93,15 +107,18 @@ async def subscribers():
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _audit_command(update, "/start")
     await subscribe(update)
     await update.message.reply_text('🤖 بوت إشارات السوق السعودي\n\nتم تسجيلك لاستقبال الإشارات.\nSIGNALS ONLY + PAPER TRADING\n\n/help للأوامر.')
 
 
 async def help_cmd(update, context):
+    _audit_command(update, "/help")
     await update.message.reply_text('/signals\n/open\n/history\n/stats\n/market\n/sectors\n/settings\n/pause\n/shutdown\n/resume\n/health')
 
 
 async def market(update, context):
+    _audit_command(update, "/market")
     if hard_stopped:
         return await update.message.reply_text('🛑 النظام متوقف بالكامل — 0 طلبات بيانات سوق. استخدم /resume للتشغيل.')
     try:
@@ -114,6 +131,7 @@ async def market(update, context):
 
 
 async def sectors(update, context):
+    _audit_command(update, "/sectors")
     if hard_stopped:
         return await update.message.reply_text('🛑 النظام متوقف بالكامل — 0 طلبات بيانات سوق. استخدم /resume للتشغيل.')
     try:
@@ -128,33 +146,43 @@ async def sectors(update, context):
 
 
 async def settings_cmd(update, context):
+    _audit_command(update, "/settings")
     await update.message.reply_text(f'⚙️ الإعدادات\nUniverse: 25 سهم\nMinimum Score: {settings.min_score}\nMinimum Probability: {settings.min_probability}%\nMax signals/day: {settings.max_new_signals_per_day}\nScan: يدوي فقط عبر /signals\nHistory: {settings.history_period} / {settings.history_interval}\nPaper: {settings.paper_mode}\nRender PORT: {settings.port}')
 
 
 async def pause(update, context):
     global paused
+    _audit_command(update, "/pause")
     paused = True
     scan_stop_event.set()
+    event("system_pause", sahmk=client.stats())
     await update.message.reply_text('⏸️ تم إيقاف البحث عن إشارات جديدة. إذا كان فحص جارٍ فسيتوقف بعد الطلب الحالي. متابعة الصفقات الورقية مستمرة.')
 
 
 async def shutdown(update, context):
     global paused, hard_stopped
+    _audit_command(update, "/shutdown")
     paused = True
     hard_stopped = True
+    client.disable("telegram:/shutdown")
     scan_stop_event.set()
+    event("system_shutdown", sahmk=client.stats())
     await update.message.reply_text('🛑 تم إيقاف بيانات السوق بالكامل. لا فحص، لا SAHMK، لا Yahoo، ولا مراقبة صفقات. Telegram و /health فقط يعملان. استخدم /resume للتشغيل.')
 
 
 async def resume(update, context):
     global paused, hard_stopped
+    _audit_command(update, "/resume")
     paused = False
     hard_stopped = False
+    client.enable("telegram:/resume")
     scan_stop_event.clear()
+    event("system_resume", sahmk=client.stats())
     await update.message.reply_text('▶️ تم استئناف النظام. لن يبدأ أي فحص حتى ترسل /signals.')
 
 
 async def health(update, context):
+    _audit_command(update, "/health")
     st = __import__('health_server').get_state()
     mode = 'SHUTDOWN' if hard_stopped else ('PAUSED' if paused else 'READY')
     api = client.stats()
@@ -162,6 +190,7 @@ async def health(update, context):
 
 
 async def signals(update, context):
+    _audit_command(update, "/signals")
     await subscribe(update)
 
     if hard_stopped:
@@ -189,6 +218,7 @@ async def signals(update, context):
 
 
 async def open_cmd(update, context):
+    _audit_command(update, "/open")
     rows = tracker.open_trades()
     if not rows:
         return await update.message.reply_text('لا توجد صفقات مفتوحة.')
@@ -196,12 +226,14 @@ async def open_cmd(update, context):
 
 
 async def history(update, context):
+    _audit_command(update, "/history")
     s = Session(); rows = s.query(Trade).order_by(Trade.id.desc()).limit(10).all(); s.close()
     text = '📚 آخر الصفقات\n\n' + ('\n'.join(f'{r.symbol}: {r.status} {r.result if r.result is not None else "-"}%' for r in rows) if rows else 'لا توجد بيانات.')
     await update.message.reply_text(text)
 
 
 async def stats(update, context):
+    _audit_command(update, "/stats")
     s = Session(); rows = s.query(Trade).filter(Trade.status == 'CLOSED').all(); s.close()
     if not rows:
         return await update.message.reply_text('📈 لا توجد صفقات مغلقة بعد.')
@@ -211,8 +243,28 @@ async def stats(update, context):
     await update.message.reply_text(f'📈 إحصائيات\nالصفقات: {len(rows)}\nالرابحة: {len(wins)}\nالخاسرة: {len(losses)}\nWin Rate: {len(wins)/len(rows)*100:.1f}%\nمتوسط الربح: {avgw:.2f}%\nمتوسط الخسارة: {avgl:.2f}%\nProfit Factor: {pf:.2f}')
 
 
+async def debug_cmd(update, context):
+    _audit_command(update, "/debug")
+    api = client.stats()
+    rows = recent(12)
+    compact = []
+    for r in rows:
+        compact.append(f"{r.get('ts','')[-15:-7]} | {r.get('event')} | {r.get('reason') or r.get('command') or r.get('path') or ''}")
+    text = (
+        "🧪 Diagnostics\n"
+        f"Firewall enabled: {api['enabled']}\n"
+        f"SAHMK allowed: {api['allowed']}\n"
+        f"SAHMK blocked: {api['blocked']}\n"
+        f"SAHMK failed: {api['failed']}\n"
+        f"Key fingerprint: {api['key_fp']}\n\n"
+        "آخر الأحداث:\n" + "\n".join(compact)
+    )
+    await update.message.reply_text(text[:3900])
+
+
 async def run_scan(context, manual_chat_id=None):
     global paused, hard_stopped, scanner
+    event("scan_enter", manual_chat_id=manual_chat_id, hard_stopped=hard_stopped, paused=paused, sahmk=client.stats())
     if hard_stopped:
         return
     if paused:
@@ -221,6 +273,7 @@ async def run_scan(context, manual_chat_id=None):
         return
     async with scan_lock:
         started = datetime.now(timezone.utc).isoformat()
+        event("scan_started", manual_chat_id=manual_chat_id, sahmk=client.stats())
         update_state(last_scan_started=started, last_scan_error=None)
         try:
             scan_stop_event.clear()
@@ -234,11 +287,14 @@ async def run_scan(context, manual_chat_id=None):
                 with client.allow_scope('/signals:market_summary'):
                     return client.market_summary()
             summary = await asyncio.to_thread(_fetch_market_summary)
+            event("scan_market_summary_done", sahmk=client.stats())
             if hard_stopped or paused or scan_stop_event.is_set():
                 return
             regime = market_regime(summary)
             bullish = regime != 'BEARISH'
+            event("scan_yahoo_begin", universe=len(TASI_25))
             results = await asyncio.to_thread(scanner.scan, bullish, scan_stop_event)
+            event("scan_yahoo_done", results=len(results))
             if hard_stopped or paused or scan_stop_event.is_set():
                 if manual_chat_id:
                     await context.bot.send_message(manual_chat_id, "🛑 تم إلغاء الفحص.")
@@ -267,23 +323,30 @@ async def run_scan(context, manual_chat_id=None):
                 signal_sent = sig.symbol
                 quota -= 1
             update_state(last_scan_finished=datetime.now(timezone.utc).isoformat(), last_scan_ok=True, last_signal=signal_sent)
+            event("scan_finished", ok=True, last_signal=signal_sent, sahmk=client.stats())
         except Exception as e:
+            event("scan_finished", ok=False, error=type(e).__name__, message=str(e)[:240], sahmk=client.stats())
             update_state(last_scan_finished=datetime.now(timezone.utc).isoformat(), last_scan_ok=False, last_scan_error=str(e)[:500])
             if manual_chat_id:
                 await context.bot.send_message(manual_chat_id, f'⚠️ فشل الفحص: {e}')
 
 
 async def monitor_trades(context):
+    event("trade_monitor_tick", hard_stopped=hard_stopped, paused=paused, sahmk=client.stats())
     if hard_stopped:
+        event("trade_monitor_skip", reason="hard_stopped")
         return
     update_state(last_trade_monitor=datetime.now(timezone.utc).isoformat())
     # Zero-API gate for the automatic monitor too. No quote calls outside TASI session.
     is_open, _ = saudi_market_session_status()
     if not is_open:
+        event("trade_monitor_skip", reason="market_closed")
         return
     rows = tracker.open_trades()
     if not rows:
+        event("trade_monitor_skip", reason="no_open_trades")
         return
+    event("trade_monitor_open_trades", count=len(rows))
     ids = await subscribers()
     for t in rows:
         try:
@@ -307,11 +370,24 @@ async def monitor_trades(context):
 
 
 
+async def error_handler(update, context):
+    err = context.error
+    event(
+        "telegram_handler_error",
+        error=type(err).__name__ if err else "Unknown",
+        message=str(err)[:300] if err else "",
+        sahmk=client.stats(),
+    )
+
+
 def build_application():
+    event("telegram_application_build", trade_monitor_seconds=settings.trade_monitor_seconds, hard_stopped=hard_stopped, sahmk=client.stats())
     app = Application.builder().token(settings.telegram_bot_token).build()
-    handlers = [('start', start), ('help', help_cmd), ('market', market), ('sectors', sectors), ('settings', settings_cmd), ('pause', pause), ('shutdown', shutdown), ('stop', shutdown), ('resume', resume), ('health', health), ('signals', signals), ('open', open_cmd), ('history', history), ('stats', stats)]
+    handlers = [('start', start), ('help', help_cmd), ('market', market), ('sectors', sectors), ('settings', settings_cmd), ('pause', pause), ('shutdown', shutdown), ('stop', shutdown), ('resume', resume), ('health', health), ('signals', signals), ('open', open_cmd), ('history', history), ('stats', stats), ('debug', debug_cmd)]
     for cmd, fn in handlers:
         app.add_handler(CommandHandler(cmd, fn))
+    app.add_error_handler(error_handler)
     # No automatic scanner. Only /signals can call run_scan().
     app.job_queue.run_repeating(monitor_trades, interval=settings.trade_monitor_seconds, first=60)
+    event("job_registered", job="monitor_trades", interval=settings.trade_monitor_seconds, first=60)
     return app

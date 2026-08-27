@@ -48,3 +48,21 @@ Render Free ينام عند عدم وجود inbound traffic. الكود لا ي�
 
 This build uses a DEFAULT-DENY firewall inside `data/sahmk.py`.
 After every deploy/restart the bot starts in `SHUTDOWN`; no SAHMK request can leave the process until `/resume` is sent. Even after `/resume`, SAHMK calls are only permitted inside explicit scopes for `/signals`, `/market`, `/sectors`, or active-trade monitoring. `/shutdown` returns the bot to zero-market-data mode. `/health` reports SAHMK allowed/blocked counters since boot and never calls SAHMK/Yahoo.
+
+## Diagnostic / API leak audit mode
+
+This build emits structured one-line `AUDIT {...}` logs for:
+- process/application startup and shutdown;
+- every inbound HTTP/health request (without headers/query/body);
+- every Telegram webhook update and command;
+- every scheduled trade-monitor tick and why it was skipped;
+- every scanner start/finish;
+- every Yahoo historical request per symbol;
+- every SAHMK allow-scope entry/exit;
+- every blocked SAHMK attempt;
+- every real outbound SAHMK HTTP request **before it leaves the process**, including safe caller file/line/function information;
+- every SAHMK response/status/error.
+
+The SAHMK API key is never printed. Logs use only a 12-character SHA-256 fingerprint (`key_fp`) so you can identify which instance/key generated a request without exposing the key.
+
+The bot starts in `SHUTDOWN` and the SAHMK circuit breaker starts disabled. `/debug` is zero-API and shows recent audit events and counters. `/health` is also zero-API and exposes only safe counters/fingerprint.
